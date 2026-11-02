@@ -27,13 +27,13 @@
       # ansible.builtin.command con `gcloud run revisions list` para obtener
       # las dos últimas revisiones.
       ansible.builtin.debug:
-        msg: "TODO: listar revisiones de {{ cloud_run_service }}"
+        msg: "UVAL-GUSTAVO: listar revisiones de {{ cloud_run_service }}"
 
     - name: "Asignar 100% del tráfico a la revisión anterior"
       # TODO(alumno): `gcloud run services update-traffic` con --to-revisions
       # apuntando a la versión anterior.
       ansible.builtin.debug:
-        msg: "TODO: redirigir tráfico a la revisión N-1"
+        msg: "UVAL-GUSTAVO: redirigir tráfico a la revisión N-1"
 
     - name: "Anunciar rollback"
       ansible.builtin.debug:

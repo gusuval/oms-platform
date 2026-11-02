@@ -45,9 +45,9 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
   CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1
 
 # TODO(alumno): añade más labels OCI si quieres (created, vendor, title, description)
-LABEL org.opencontainers.image.source="https://github.com/TODO-org/oms" \
+LABEL org.opencontainers.image.source="https://github.com/gusuval/oms" \
       org.opencontainers.image.version="0.1.0" \
-      org.opencontainers.image.revision="TODO_GIT_SHA" \
+      org.opencontainers.image.revision="GUSUVAL_GIT_SHA" \
       org.opencontainers.image.licenses="MIT"
 
 CMD ["node", "server.js"]
