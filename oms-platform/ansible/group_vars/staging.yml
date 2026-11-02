@@ -4,7 +4,7 @@
 # Cualquier otra cosa que cambie aquí, justifícala en el PR.
 
 env:         "staging"
-gcp_project: "uval-gustavo-acme-oms-staging"
+gcp_project: "gusuval-acme-oms-staging"
 
 # Capacidad — ajustada a tráfico de QA
 cloud_run_min_instances: 0
