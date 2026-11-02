@@ -15,7 +15,7 @@ db_tier              = "db-perf-optimized-N-2" # 2 vCPU (Enterprise Plus, PITR 1
 redis_memory_size_gb = 1
 
 cloud_run_min_instances = 0 # escala a cero cuando no hay tráfico
-cloud_run_max_instances = 5 # tope conservador para staging
+cloud_run_max_instances = 2 # tope conservador para staging
 cloud_run_cpu           = "1000m"
 cloud_run_memory        = "1Gi"
 

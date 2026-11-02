@@ -8,7 +8,7 @@ gcp_project: "gusuval-acme-oms-staging"   # proyecto GCP distinto por entorno
 
 # Capacidad — ajustada a tráfico de QA (mismos valores que staging.tfvars)
 cloud_run_min_instances: 0                # escala a cero: sin tráfico, sin coste
-cloud_run_max_instances: 5                # tope conservador para QA
+cloud_run_max_instances: 2                # tope conservador para QA
 cloud_run_cpu:    "1000m"                 # la carga de QA no necesita más
 cloud_run_memory: "1Gi"
 
