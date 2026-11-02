@@ -1,23 +1,19 @@
 ---
 # ── STAGING ──────────────────────────────────────────────
-# Diferencias legítimas con producción: capacidad y endpoints.
-# Cualquier otra cosa que cambie aquí, justifícala en el PR.
+# Diferencias legítimas con producción: identidad, capacidad y escalones
+# del canary. Todo lo demás (comportamiento) vive en all.yml.
 
-env:         "staging"
-gcp_project: "TODO-acme-oms-staging"
+env:         "staging"                    # identidad del entorno
+gcp_project: "gusuval-acme-oms-staging"   # proyecto GCP distinto por entorno
 
-# Capacidad — ajustada a tráfico de QA
-cloud_run_min_instances: 0
-cloud_run_max_instances: 5
-cloud_run_cpu:    "1000m"
+# Capacidad — ajustada a tráfico de QA (mismos valores que staging.tfvars)
+cloud_run_min_instances: 0                # escala a cero: sin tráfico, sin coste
+cloud_run_max_instances: 5                # tope conservador para QA
+cloud_run_cpu:    "1000m"                 # la carga de QA no necesita más
 cloud_run_memory: "1Gi"
 
-# Endpoints
-db_instance_connection: "{{ gcp_project }}:{{ region }}:oms-staging-postgres"
-redis_endpoint:         "TODO_REDIS_IP_DE_TERRAFORM_OUTPUT"
-
-# Tráfico
-traffic_percent: 100   # staging recibe el 100% de la nueva revisión inmediatamente
+# Escalones de tráfico: staging va directo al 100% (nadie real sufre un fallo)
+traffic_steps: [100]
 
 # Notificaciones
 slack_channel: "#deploys-staging"

@@ -1,11 +1,13 @@
 ---
 # ── playbook: rollback.yml ────────────────────────────────────────
-# Vuelve el tráfico a la revisión anterior conocida del servicio Cloud Run.
+# Vuelve el 100% del tráfico a la revisión anterior conocida: la revisión
+# Ready más reciente cuya imagen es distinta de la última desplegada.
 #
 # Uso:
 #   ansible-playbook playbooks/rollback.yml -e env=production
+#   ansible-playbook playbooks/rollback.yml -e env=production -e rollback_to=oms-production-00042-abc
 #
-# La revisión anterior se obtiene de la API de Cloud Run.
+# Idempotente: si la revisión destino ya recibe el 100%, changed=0.
 
 - name: "Rollback OMS — {{ env | default('?') }}"
   hosts: localhost
@@ -21,20 +23,85 @@
         that:
           - env is defined
           - env in ['staging', 'production']
+        quiet: true
 
-    - name: "Listar revisiones recientes del servicio"
-      # TODO(alumno): usa el módulo google.cloud.gcp_run_service_info o un
-      # ansible.builtin.command con `gcloud run revisions list` para obtener
-      # las dos últimas revisiones.
-      ansible.builtin.debug:
-        msg: "TODO: listar revisiones de {{ cloud_run_service }}"
+    - name: "Leer el servicio"
+      ansible.builtin.command:
+        argv:
+          - gcloud
+          - run
+          - services
+          - describe
+          - "{{ cloud_run_service }}"
+          - "--project={{ gcp_project }}"
+          - "--region={{ region }}"
+          - --format=json
+      register: svc_raw
+      changed_when: false
+      check_mode: false
 
-    - name: "Asignar 100% del tráfico a la revisión anterior"
-      # TODO(alumno): `gcloud run services update-traffic` con --to-revisions
-      # apuntando a la versión anterior.
-      ansible.builtin.debug:
-        msg: "TODO: redirigir tráfico a la revisión N-1"
+    - name: "Listar revisiones del servicio"
+      ansible.builtin.command:
+        argv:
+          - gcloud
+          - run
+          - revisions
+          - list
+          - "--service={{ cloud_run_service }}"
+          - "--project={{ gcp_project }}"
+          - "--region={{ region }}"
+          - --format=json
+      register: revisions_raw
+      changed_when: false
+      check_mode: false
+
+    - name: "Calcular revisión destino"
+      vars:
+        svc: "{{ svc_raw.stdout | from_json }}"
+        revisions: "{{ revisions_raw.stdout | from_json | sort(attribute='metadata.creationTimestamp', reverse=true) }}"
+        latest_name: "{{ svc.status.latestCreatedRevisionName }}"
+        latest_image: >-
+          {{ (revisions | selectattr('metadata.name', 'equalto', latest_name) | first).spec.containers[0].image }}
+        ready_candidates: >-
+          {% set out = [] %}{% for r in revisions %}{% if r.metadata.name != latest_name
+          and (r.status.conditions | default([]) | selectattr('type', 'equalto', 'Ready')
+          | selectattr('status', 'equalto', 'True') | list | length > 0) %}{% set _ = out.append(r) %}{% endif %}{% endfor %}{{ out }}
+        older_images: >-
+          {{ ready_candidates | rejectattr('spec.containers.0.image', 'equalto', latest_image) | list }}
+        target_name: >-
+          {{ rollback_to | default((older_images | first).metadata.name if older_images | length > 0 else '') }}
+      ansible.builtin.set_fact:
+        rollback_target: "{{ target_name | trim }}"
+        target_percent: >-
+          {{ svc.status.traffic | default([])
+             | selectattr('revisionName', 'defined')
+             | selectattr('revisionName', 'equalto', target_name | trim)
+             | map(attribute='percent') | map('default', 0) | sum }}
+
+    - name: "Debe existir una revisión anterior"
+      ansible.builtin.assert:
+        that: rollback_target | length > 0
+        fail_msg: "No hay ninguna revisión Ready anterior con otra imagen. Indica una con -e rollback_to=<revisión>."
+        quiet: true
+
+    - name: "Asignar 100% del tráfico a {{ rollback_target }}"
+      ansible.builtin.command:
+        argv:
+          - gcloud
+          - run
+          - services
+          - update-traffic
+          - "{{ cloud_run_service }}"
+          - "--project={{ gcp_project }}"
+          - "--region={{ region }}"
+          - "--to-revisions={{ rollback_target }}=100"
+          - --quiet
+      register: rollback_result
+      changed_when: rollback_result.rc == 0
+      when: target_percent | int < 100
 
     - name: "Anunciar rollback"
       ansible.builtin.debug:
-        msg: "Rollback completado en {{ env }}. Investiga la causa en {{ slack_channel }}."
+        msg: >-
+          Rollback en {{ env }}: 100% del tráfico en {{ rollback_target }}.
+          Investiga la causa en {{ slack_channel }}.

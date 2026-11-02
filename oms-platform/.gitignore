@@ -1,0 +1,27 @@
+# Terraform — el .terraform.lock.hcl SÍ se commitea
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Ansible
+ansible/.collections/
+*.retry
+ansible/run2.log
+
+# App
+node_modules/
+npm-debug.log*
+
+# Credenciales: NUNCA en el repo
+*.json.key
+*-key.json
+service-account*.json
+.env
+.env.*
