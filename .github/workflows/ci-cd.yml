@@ -1,0 +1,255 @@
+# ── CI/CD del OMS ─────────────────────────────────────────────────
+# PR / push      → validate (matriz staging+production) + test
+# push a main    → + build, firma y deploy a STAGING
+# tag v*         → + promoción del MISMO digest a PRODUCTION (con aprobación)
+#
+# Autenticación a GCP SOLO vía Workload Identity Federation: no hay
+# ninguna clave de Service Account en secrets. Los identificadores de WIF
+# no son secretos y van en Variables del repo (Settings → Variables):
+#   WIF_PROVIDER_STAGING, CICD_SA_STAGING      (terraform output, env staging)
+#   WIF_PROVIDER_PRODUCTION, CICD_SA_PRODUCTION (terraform output, env production)
+#
+# Nota: GitHub solo lee workflows en la raíz del repo, por eso este
+# fichero vive aquí y no en oms-platform/.github/.
+
+name: ci-cd
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: false # nunca cortar un deploy a medias
+
+env:
+  REGION: europe-west3
+  IMAGE: europe-west3-docker.pkg.dev/gusuval-acme-oms-staging/oms/oms
+
+defaults:
+  run:
+    working-directory: oms-platform
+
+jobs:
+  validate:
+    name: validate (${{ matrix.env }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [staging, production]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - name: terraform fmt
+        working-directory: oms-platform/terraform
+        run: terraform fmt -check -recursive
+
+      - name: terraform validate
+        working-directory: oms-platform/terraform
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      - name: tfvars del entorno existen y son coherentes
+        working-directory: oms-platform/terraform
+        run: |
+          test -f envs/${{ matrix.env }}.tfvars
+          test -f envs/${{ matrix.env }}.gcs.tfbackend
+          grep -q '^env *= *"${{ matrix.env }}"' envs/${{ matrix.env }}.tfvars
+          grep -q '^deletion_protection *= *true' envs/${{ matrix.env }}.tfvars
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: ansible syntax-check
+        working-directory: oms-platform/ansible
+        run: |
+          pip install --quiet "ansible-core>=2.16,<2.22"
+          ansible-galaxy collection install -r requirements.yml
+          ansible-playbook playbooks/deploy.yml --syntax-check \
+            -e env=${{ matrix.env }} -e image_sha=sha256:$(printf '0%.0s' $(seq 64))
+          ansible-playbook playbooks/rollback.yml --syntax-check -e env=${{ matrix.env }}
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks revisa toda la historia
+
+      - name: gitleaks (cero credenciales estáticas)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: oms-platform/docker/Dockerfile
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: tests de la app
+        working-directory: oms-platform/app
+        run: npm ci && npm test
+
+      - name: diff staging/production (solo capacidad/identidad)
+        working-directory: oms-platform/ansible
+        run: diff group_vars/staging.yml group_vars/production.yml || true
+
+  build:
+    needs: [validate, test]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC → WIF (y firma keyless con cosign)
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER_STAGING }}
+          service_account: ${{ vars.CICD_SA_STAGING }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: login en Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: metadatos
+        id: meta
+        run: |
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            echo "tags=${IMAGE}:${GITHUB_SHA},${IMAGE}:${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+            echo "tags=${IMAGE}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: build & push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: oms-platform/app
+          file: oms-platform/docker/Dockerfile
+          push: true
+          provenance: true
+          sbom: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ steps.meta.outputs.date }}
+            VERSION=${{ steps.meta.outputs.version }}
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: firmar imagen (keyless, identidad OIDC del workflow)
+        run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
+
+  deploy-staging:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER_STAGING }}
+          service_account: ${{ vars.CICD_SA_STAGING }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: verificar firma antes de desplegar
+        run: |
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+          cosign verify "${IMAGE}@${{ needs.build.outputs.digest }}" \
+            --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp="^https://github.com/${{ github.repository }}/.github/workflows/ci-cd.yml@" > /dev/null
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: ansible
+        working-directory: oms-platform/ansible
+        run: |
+          pip install --quiet "ansible-core>=2.16,<2.22"
+          ansible-galaxy collection install -r requirements.yml
+
+      - name: deploy staging
+        working-directory: oms-platform/ansible
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          ansible-playbook playbooks/deploy.yml \
+            -e env=staging -e image_sha=${{ needs.build.outputs.digest }}
+
+      - name: idempotencia (segunda ejecución = changed=0)
+        working-directory: oms-platform/ansible
+        run: |
+          ansible-playbook playbooks/deploy.yml \
+            -e env=staging -e image_sha=${{ needs.build.outputs.digest }} | tee run2.log
+          grep -Eq 'localhost +: .*changed=0 ' run2.log
+
+  deploy-production:
+    needs: [build, deploy-staging]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: production # configura "Required reviewers" en GitHub
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER_PRODUCTION }}
+          service_account: ${{ vars.CICD_SA_PRODUCTION }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: ansible
+        working-directory: oms-platform/ansible
+        run: |
+          pip install --quiet "ansible-core>=2.16,<2.22"
+          ansible-galaxy collection install -r requirements.yml
+
+      - name: promover el MISMO digest a producción
+        working-directory: oms-platform/ansible
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          ansible-playbook playbooks/deploy.yml \
+            -e env=production -e image_sha=${{ needs.build.outputs.digest }}

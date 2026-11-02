@@ -1,0 +1,39 @@
+---
+# Un escalón del canary: mover tráfico → verificar salud → observar.
+
+- name: "Tráfico {{ step }}% → {{ target_revision }}"
+  ansible.builtin.command:
+    argv:
+      - gcloud
+      - run
+      - services
+      - update-traffic
+      - "{{ cloud_run_service }}"
+      - "--project={{ gcp_project }}"
+      - "--region={{ region }}"
+      - "--to-revisions={{ target_revision }}={{ step }}"
+      - --quiet
+  register: traffic_result
+  changed_when: traffic_result.rc == 0
+
+- name: "Marcar que el rollout ha cambiado algo"
+  ansible.builtin.set_fact:
+    rollout_changed: true
+
+- name: "Healthcheck tras pasar a {{ step }}%"
+  ansible.builtin.uri:
+    url: "{{ public_url }}{{ health_path }}"
+    status_code: 200
+    validate_certs: "{{ healthcheck_validate_certs }}"
+    timeout: 5
+  register: step_health
+  until: step_health.status == 200
+  retries: "{{ healthcheck_retries }}"
+  delay: "{{ healthcheck_delay }}"
+  check_mode: false
+  changed_when: false
+
+- name: "Observar {{ rollout_pause_seconds }}s antes del siguiente escalón"
+  ansible.builtin.pause:
+    seconds: "{{ rollout_pause_seconds }}"
+  when: step | int < 100

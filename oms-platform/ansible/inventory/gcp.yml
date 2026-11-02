@@ -2,12 +2,12 @@
 # Inventario dinámico de GCP.
 #
 # El playbook de despliegue de Cloud Run no necesita SSH a hosts — usa la API
-# directamente desde el control node. Pero este inventario sirve para:
-#   1. Localhost como host de control (siempre presente)
-#   2. BONUS bastion: cualquier VM Compute con label role=bastion la descubre
+# directamente desde el control node (localhost implícito). Este inventario
+# sirve para el BONUS bastion: cualquier VM con label role=bastion aparece en
+# el grupo role_bastion.
 #
 # Uso:
-#   ansible-inventory -i inventory/gcp.yml --graph
+#   GCP_PROJECT=gusuval-acme-oms-staging ansible-inventory -i inventory/gcp.yml --graph
 
 plugin: google.cloud.gcp_compute
 projects:

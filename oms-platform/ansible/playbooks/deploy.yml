@@ -8,7 +8,7 @@
 #     -e image_sha=sha256:a1b2c3d4...
 #
 # Idempotencia: ejecutar dos veces seguidas con el mismo image_sha
-# debe devolver changed=0 la segunda vez.
+# devuelve changed=0 la segunda vez.
 
 - name: "Deploy OMS — {{ env | default('?') }}"
   hosts: localhost
@@ -31,6 +31,7 @@
           Uso: ansible-playbook playbooks/deploy.yml \
                  -e env=<staging|production> \
                  -e image_sha=sha256:<64 hex chars>
+        quiet: true
 
     - name: "Mostrar resumen del despliegue"
       ansible.builtin.debug:
@@ -41,7 +42,7 @@
           ║  Servicio:       {{ cloud_run_service }}
           ║  Imagen:         {{ image_repo }}@{{ image_sha }}
           ║  Min/Max inst:   {{ cloud_run_min_instances }}/{{ cloud_run_max_instances }}
-          ║  Tráfico nuevo:  {{ traffic_percent }}%
+          ║  Escalones:      {{ traffic_steps | join('% → ') }}%
           ╚═══════════════════════════════════════════════════════════╝
 
   roles:
@@ -51,12 +52,30 @@
 
   post_tasks:
     - name: "Verificar healthcheck del servicio desplegado"
-      # TODO(alumno): usa ansible.builtin.uri para hacer GET al /healthz
-      # del Cloud Run y comprobar que responde 200 antes de declarar éxito.
-      ansible.builtin.debug:
-        msg: "gusuval: implementar healthcheck post-deploy contra {{ cloud_run_service }}"
+      ansible.builtin.uri:
+        url: "{{ public_url }}{{ health_path }}"
+        status_code: 200
+        validate_certs: "{{ healthcheck_validate_certs | default(true) }}"
+        timeout: 5
+      register: final_health
+      until: final_health.status == 200
+      retries: "{{ healthcheck_retries }}"
+      delay: "{{ healthcheck_delay }}"
+      check_mode: false
+      changed_when: false
 
     - name: "Notificar a Slack"
-      # TODO(alumno) [bonus]: notifica al canal correspondiente con el SHA desplegado.
-      ansible.builtin.debug:
-        msg: "gusuval: avisar a {{ slack_channel }} de despliegue de {{ image_sha }}"
+      # Solo si el rollout cambió algo y hay webhook (variable de entorno,
+      # nunca en el repo). Una segunda ejecución sin cambios no notifica.
+      ansible.builtin.uri:
+        url: "{{ lookup('ansible.builtin.env', 'SLACK_WEBHOOK_URL') }}"
+        method: POST
+        body_format: json
+        body:
+          channel: "{{ slack_channel }}"
+          text: ":rocket: OMS {{ env }} → `{{ image_sha }}` (revisión {{ target_revision }})"
+        status_code: 200
+      changed_when: false
+      when:
+        - rollout_changed | default(false)
+        - lookup('ansible.builtin.env', 'SLACK_WEBHOOK_URL') | length > 0

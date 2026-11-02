@@ -1,21 +1,32 @@
 # ── Entorno: STAGING ────────────────────────────────────────────────
 # Tier reducido, autoscaling mínimo, deletion_protection sigue ACTIVADO
 # (es buena práctica protegerlo también en staging).
+#
+# Diferencias con production.tfvars (todas de capacidad/identidad):
+#   project_id, db_tier, redis_memory_size_gb, cloud_run_*, github_allowed_refs
 
-project_id = "gusuval-acme-oms-staging"   # ⚠ TODO(alumno): tu proyecto GCP de staging
-region     = "europe-west3"            # REG-GDPR-001
+project_id = "gusuval-acme-oms-staging"
+region     = "europe-west3" # REG-GDPR-001
 env        = "staging"
 
-vpc_cidr   = "10.20.0.0/16"
+vpc_cidr = "10.20.0.0/16"
 
-db_tier    = "db-custom-2-7680"        # 2 vCPU, 7.5 GB RAM
+db_tier              = "db-perf-optimized-N-2" # 2 vCPU (Enterprise Plus, PITR 14 d)
+redis_memory_size_gb = 1
 
-cloud_run_min_instances = 0            # escala a cero cuando no hay tráfico
-cloud_run_max_instances = 5            # tope conservador para staging
+cloud_run_min_instances = 0 # escala a cero cuando no hay tráfico
+cloud_run_max_instances = 5 # tope conservador para staging
+cloud_run_cpu           = "1000m"
+cloud_run_memory        = "1Gi"
 
-image_repo = "europe-west3-docker.pkg.dev/gusuval-project/oms"
-image_sha  = "sha256:GUSUVAL_GIT_SHA"
+# Registry compartido: vive en staging; producción tira del MISMO digest.
+artifact_registry_project_id = "gusuval-acme-oms-staging"
+image_repo                   = "europe-west3-docker.pkg.dev/gusuval-acme-oms-staging/oms/oms"
+image_sha                    = "" # bootstrap; a partir de ahí despliega Ansible
 
-deletion_protection = true             # también en staging
+domain = "" # vacío → <IP-LB>.nip.io
 
-github_repository = "gusuval/oms-platform"
+deletion_protection = true # también en staging
+
+github_repository   = "gusuval/oms-platform"
+github_allowed_refs = ["refs/heads/main", "refs/tags/v"]

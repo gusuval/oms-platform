@@ -1,0 +1,15 @@
+{
+  "name": "acme-oms",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Stub del OMS para validar la plataforma (la app real llega en bloques posteriores).",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}

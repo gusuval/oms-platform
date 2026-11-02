@@ -1,69 +1,152 @@
 ---
 # ── role: oms_cloud_run ─────────────────────────────────────────
-# Despliega/actualiza el servicio Cloud Run del OMS al SHA pedido.
-# Debe ser IDEMPOTENTE — segunda ejecución con mismo SHA = changed=0.
+# Despliega/actualiza el servicio Cloud Run del OMS al digest pedido.
+#
+# IDEMPOTENTE — segunda ejecución con el mismo SHA = changed=0:
+#   1. Solo crea revisión si la imagen del template != imagen objetivo.
+#   2. Solo mueve tráfico en los escalones que superan el % que YA
+#      recibe la revisión objetivo (un canary interrumpido se reanuda).
+#   3. Las lecturas (describe, IP del LB) son changed_when: false.
+#
+# ¿Por qué gcloud y no un módulo google.cloud.gcp_cloudrun_*? La colección
+# google.cloud (1.x) no trae módulos de Cloud Run. Usamos `gcloud` con
+# salida JSON + changed_when explícitos; nunca shell, siempre command.
+#
+# Terraform crea el servicio (config, secretos, VPC, probes). Ansible solo
+# cambia imagen, capacidad y tráfico — Terraform ignora esos campos.
 
-- name: "Verificar que gcloud está autenticado en el proyecto correcto"
+- name: "Comprobar que gcloud tiene una cuenta activa"
   ansible.builtin.command:
-    cmd: gcloud config get-value project
-  register: gcloud_project
+    cmd: gcloud auth list --filter=status:ACTIVE --format=value(account)
+  register: gcloud_account
   changed_when: false
-  failed_when: gcloud_project.stdout != gcp_project
+  check_mode: false
+  failed_when: gcloud_account.rc != 0 or gcloud_account.stdout | trim | length == 0
 
-- name: "Comprobar si la revisión con este SHA ya existe"
-  # Si la imagen exacta ya está desplegada Y recibe tráfico, no hacemos nada.
+- name: "Leer el estado actual del servicio"
   ansible.builtin.command:
-    cmd: >-
-      gcloud run services describe {{ cloud_run_service }}
-      --region={{ region }}
-      --format=value(spec.template.spec.containers[0].image)
-  register: current_image
+    argv:
+      - gcloud
+      - run
+      - services
+      - describe
+      - "{{ cloud_run_service }}"
+      - "--project={{ gcp_project }}"
+      - "--region={{ region }}"
+      - --format=json
+  register: svc_before
   changed_when: false
-  failed_when: false   # primera vez no existe el servicio, no es error
+  check_mode: false
+  failed_when: false
+
+- name: "El servicio debe existir (lo crea Terraform)"
+  ansible.builtin.assert:
+    that: svc_before.rc == 0
+    fail_msg: >-
+      El servicio {{ cloud_run_service }} no existe en {{ gcp_project }}.
+      Ejecuta antes `terraform apply -var-file=envs/{{ env }}.tfvars`.
+    quiet: true
+
+- name: "Calcular imagen actual vs objetivo"
+  ansible.builtin.set_fact:
+    current_image: "{{ (svc_before.stdout | from_json).spec.template.spec.containers[0].image }}"
+    revision_tag: "sha-{{ image_sha | regex_replace('^sha256:(.{12}).*$', '\\1') }}"
 
 - name: "Mostrar comparación de imágenes"
   ansible.builtin.debug:
     msg: |
-      Imagen desplegada actualmente: {{ current_image.stdout | default('(ninguna)') }}
+      Imagen desplegada actualmente: {{ current_image }}
       Imagen objetivo:                {{ full_image }}
 
-- name: "Desplegar nueva revisión de Cloud Run"
-  # TODO(alumno): usa el módulo google.cloud.gcp_run_service (preferido) o
-  # un command con `gcloud run deploy`. El comando debe:
-  #   - apuntar al image por DIGEST (no tag mutable)
-  #   - aplicar min/max instances de los group_vars
-  #   - inyectar env vars y secret refs
-  #   - NO recibir tráfico aún (--no-traffic) si traffic_percent < 100
+- name: "Cambio pendiente (solo en --check)"
+  ansible.builtin.debug:
+    msg: "Se desplegaría {{ full_image }} y se aplicarían los escalones {{ traffic_steps }}"
+  changed_when: true
+  when:
+    - ansible_check_mode
+    - current_image != full_image
+
+- name: "Desplegar nueva revisión de Cloud Run (sin tráfico)"
   ansible.builtin.command:
-    cmd: >-
-      gcloud run deploy {{ cloud_run_service }}
-      --image={{ full_image }}
-      --region={{ region }}
-      --min-instances={{ cloud_run_min_instances }}
-      --max-instances={{ cloud_run_max_instances }}
-      --cpu={{ cloud_run_cpu }}
-      --memory={{ cloud_run_memory }}
-      --no-traffic
-      --tag=rev-{{ image_sha | regex_replace('^sha256:(.{8}).*', '\\1') }}
-      --quiet
+    argv:
+      - gcloud
+      - run
+      - deploy
+      - "{{ cloud_run_service }}"
+      - "--project={{ gcp_project }}"
+      - "--region={{ region }}"
+      - "--image={{ full_image }}"
+      - "--min-instances={{ cloud_run_min_instances }}"
+      - "--max-instances={{ cloud_run_max_instances }}"
+      - "--cpu={{ cloud_run_cpu }}"
+      - "--memory={{ cloud_run_memory }}"
+      - --no-traffic
+      - "--tag={{ revision_tag }}"
+      - --quiet
   register: deploy_result
-  changed_when: "'No changes' not in deploy_result.stderr"
-  when: current_image.stdout != full_image
+  changed_when: deploy_result.rc == 0
+  when: current_image != full_image
 
-- name: "Redirigir tráfico a la nueva revisión"
-  # TODO(alumno): aplica el traffic_percent de los group_vars.
-  # En staging suele ser 100% (big-bang acepta el riesgo).
-  # En producción suele empezar en 10% y subir gradualmente con verificación.
+- name: "Releer el servicio tras el despliegue"
   ansible.builtin.command:
-    cmd: >-
-      gcloud run services update-traffic {{ cloud_run_service }}
-      --region={{ region }}
-      --to-tags=rev-{{ image_sha | regex_replace('^sha256:(.{8}).*', '\\1') }}={{ traffic_percent }}
-      --quiet
-  register: traffic_result
-  changed_when: "'No changes' not in traffic_result.stderr"
-  when: current_image.stdout != full_image
+    argv:
+      - gcloud
+      - run
+      - services
+      - describe
+      - "{{ cloud_run_service }}"
+      - "--project={{ gcp_project }}"
+      - "--region={{ region }}"
+      - --format=json
+  register: svc_after
+  changed_when: false
+  check_mode: false
 
-# TODO(alumno) [opcional, bonus]: añade un paso que espere a que la nueva
-# revisión esté Ready antes de devolver el control:
-#   gcloud run revisions describe ... --format=value(status.conditions[0].status)
+- name: "Calcular revisión objetivo y tráfico que ya recibe"
+  vars:
+    svc: "{{ svc_after.stdout | from_json }}"
+  ansible.builtin.set_fact:
+    target_revision: "{{ svc.status.latestCreatedRevisionName }}"
+    target_image: "{{ svc.spec.template.spec.containers[0].image }}"
+    current_percent: >-
+      {{ svc.status.traffic | default([])
+         | selectattr('revisionName', 'defined')
+         | selectattr('revisionName', 'equalto', svc.status.latestCreatedRevisionName)
+         | map(attribute='percent') | map('default', 0) | sum }}
+
+- name: "Resolver la IP del Load Balancer"
+  ansible.builtin.command:
+    argv:
+      - gcloud
+      - compute
+      - addresses
+      - describe
+      - "{{ project_prefix }}-{{ env }}-lb-ip"
+      - --global
+      - "--project={{ gcp_project }}"
+      - --format=value(address)
+  register: lb_ip
+  changed_when: false
+  check_mode: false
+  when: public_hostname | length == 0
+
+- name: "Fijar URL pública del healthcheck"
+  ansible.builtin.set_fact:
+    public_url: >-
+      https://{{ public_hostname if public_hostname | length > 0
+                 else (lb_ip.stdout | trim) ~ '.nip.io' }}
+
+- name: "Resumen del rollout"
+  ansible.builtin.debug:
+    msg: >-
+      Revisión {{ target_revision }} recibe {{ current_percent }}% ·
+      escalones pendientes: {{ traffic_steps | select('gt', current_percent | int) | list }}
+
+- name: "Aplicar escalones de tráfico pendientes"
+  ansible.builtin.include_tasks: rollout_step.yml
+  loop: "{{ traffic_steps | select('gt', current_percent | int) | list }}"
+  loop_control:
+    loop_var: step
+  when:
+    - not ansible_check_mode or current_image == full_image
+    - target_image == full_image

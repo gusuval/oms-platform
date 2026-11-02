@@ -1,0 +1,7 @@
+---
+# Valores por defecto del role (sobrescribibles desde group_vars / -e).
+rollout_pause_seconds: 60
+healthcheck_retries: 10
+healthcheck_delay: 6
+healthcheck_validate_certs: true
+public_hostname: ""
