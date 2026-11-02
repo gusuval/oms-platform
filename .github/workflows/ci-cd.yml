@@ -83,6 +83,9 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read # gitleaks-action lista los commits del PR
     steps:
       - uses: actions/checkout@v4
         with:
