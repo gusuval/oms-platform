@@ -1,0 +1,248 @@
+# ── CI/CD del OMS (GitLab) ────────────────────────────────────────
+# Equivalente a .github/workflows/ci-cd.yml:
+#   MR / push a main → validate (matriz staging+production) + test
+#   push a main      → + build, firma y deploy a STAGING
+#   tag v*           → + promoción del MISMO digest a PRODUCTION (manual)
+#
+# Autenticación a GCP SOLO vía Workload Identity Federation (id_tokens de
+# GitLab): no hay claves de Service Account. Variables del proyecto
+# (Settings → CI/CD → Variables, no son secretos):
+#   WIF_PROVIDER_STAGING, CICD_SA_STAGING
+#   WIF_PROVIDER_PRODUCTION, CICD_SA_PRODUCTION
+#   SLACK_WEBHOOK_URL (este sí: masked + protected)
+#
+# ⚠ LIMITACIONES CONOCIDAS (build/deploy fallarán hasta resolverlas):
+#   1. El WIF de Terraform (modules/iam) solo confía en el issuer de GitHub
+#      Actions. Hay que añadir un provider OIDC con issuer
+#      https://gitlab.codecrypto.academy y condición sobre
+#      assertion.project_path / assertion.ref.
+#   2. La firma keyless de cosign usa Fulcio público, que solo acepta
+#      tokens de gitlab.com (no de instancias self-hosted). Habría que usar
+#      una clave KMS (cosign sign --key gcpkms://...) o un Fulcio propio.
+#
+# Requisitos del runner: docker executor con privileged=true (docker:dind).
+# Para la aprobación en producción: Settings → CI/CD → Protected
+# environments → "production" con approvers (equivale a Required reviewers).
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG =~ /^v/
+
+stages: [validate, test, build, deploy-staging, deploy-production]
+
+variables:
+  REGION: europe-west3
+  IMAGE: europe-west3-docker.pkg.dev/gusuval-acme-oms-staging/oms/oms
+  TERRAFORM_VERSION: "1.9.8"
+  ANSIBLE_CORE: "ansible-core>=2.16,<2.22"
+  COSIGN_VERSION: "v2.4.1"
+  GCLOUD_IMAGE: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
+
+# Solo en push a main o tag v* (equivale a github.event_name == 'push')
+.on-push: &on-push
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG =~ /^v/
+
+# ── Snippets reutilizables ───────────────────────────────────────
+.gcp-auth:
+  # Requiere: WIF_PROVIDER, CICD_SA y el id_token GCP_ID_TOKEN
+  script:
+    - echo "$GCP_ID_TOKEN" > /tmp/oidc.jwt
+    - >
+      gcloud iam workload-identity-pools create-cred-config "$WIF_PROVIDER"
+      --service-account="$CICD_SA"
+      --credential-source-file=/tmp/oidc.jwt
+      --output-file=/tmp/gcp-cred.json
+    - gcloud auth login --cred-file=/tmp/gcp-cred.json --quiet
+    - export GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-cred.json
+    - gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+.install-cosign:
+  script:
+    - curl -sSfL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64" -o /usr/local/bin/cosign
+    - chmod +x /usr/local/bin/cosign
+
+.install-ansible:
+  script:
+    - pip3 install --quiet --break-system-packages "$ANSIBLE_CORE" requests google-auth
+    - cd oms-platform/ansible
+    - ansible-galaxy collection install -r requirements.yml
+
+# ── validate ─────────────────────────────────────────────────────
+validate:terraform:
+  stage: validate
+  image:
+    name: hashicorp/terraform:${TERRAFORM_VERSION}
+    entrypoint: [""]
+  parallel:
+    matrix:
+      - ENV: [staging, production]
+  script:
+    - cd oms-platform/terraform
+    - terraform fmt -check -recursive
+    - terraform init -backend=false -input=false
+    - terraform validate
+    # tfvars del entorno existen y son coherentes
+    - test -f "envs/${ENV}.tfvars"
+    - test -f "envs/${ENV}.gcs.tfbackend"
+    - grep -q "^env *= *\"${ENV}\"" "envs/${ENV}.tfvars"
+    - grep -q '^deletion_protection *= *true' "envs/${ENV}.tfvars"
+
+validate:ansible:
+  stage: validate
+  image: python:3.12
+  parallel:
+    matrix:
+      - ENV: [staging, production]
+  script:
+    - pip install --quiet "$ANSIBLE_CORE"
+    - cd oms-platform/ansible
+    - ansible-galaxy collection install -r requirements.yml
+    - >
+      ansible-playbook playbooks/deploy.yml --syntax-check
+      -e env=${ENV} -e image_sha=sha256:$(printf '0%.0s' $(seq 64))
+    - ansible-playbook playbooks/rollback.yml --syntax-check -e env=${ENV}
+
+# ── test ─────────────────────────────────────────────────────────
+test:gitleaks:
+  stage: test
+  needs: []
+  image:
+    name: zricethezav/gitleaks:latest
+    entrypoint: [""]
+  variables:
+    GIT_DEPTH: 0 # gitleaks revisa toda la historia
+  script:
+    - gitleaks git --redact --verbose .
+
+test:hadolint:
+  stage: test
+  needs: []
+  image: hadolint/hadolint:latest-debian
+  script:
+    - hadolint oms-platform/docker/Dockerfile
+
+test:app:
+  stage: test
+  needs: []
+  image: node:22
+  script:
+    - cd oms-platform/app
+    - npm ci
+    - npm test
+
+test:diff-envs:
+  stage: test
+  needs: []
+  image: alpine:3.20
+  script:
+    # diff staging/production (solo capacidad/identidad)
+    - diff oms-platform/ansible/group_vars/staging.yml oms-platform/ansible/group_vars/production.yml || true
+
+# ── build ────────────────────────────────────────────────────────
+build:
+  stage: build
+  <<: *on-push
+  image: $GCLOUD_IMAGE
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+    WIF_PROVIDER: $WIF_PROVIDER_STAGING
+    CICD_SA: $CICD_SA_STAGING
+  id_tokens:
+    GCP_ID_TOKEN:
+      aud: https://iam.googleapis.com/${WIF_PROVIDER_STAGING}
+    SIGSTORE_ID_TOKEN: # firma keyless con cosign
+      aud: sigstore
+  script:
+    - !reference [.gcp-auth, script]
+    - docker buildx create --use --name oms-builder
+    # metadatos
+    - BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    - |
+      if [[ -n "$CI_COMMIT_TAG" ]]; then
+        VERSION="${CI_COMMIT_TAG#v}"
+        TAGS="-t ${IMAGE}:${CI_COMMIT_SHA} -t ${IMAGE}:${CI_COMMIT_TAG}"
+      else
+        VERSION="0.0.0-${CI_COMMIT_SHA:0:12}"
+        TAGS="-t ${IMAGE}:${CI_COMMIT_SHA}"
+      fi
+    # build & push
+    - >
+      docker buildx build oms-platform/app
+      -f oms-platform/docker/Dockerfile
+      --push --provenance=true --sbom=true
+      $TAGS
+      --build-arg GIT_SHA="$CI_COMMIT_SHA"
+      --build-arg BUILD_DATE="$BUILD_DATE"
+      --build-arg VERSION="$VERSION"
+      --metadata-file /tmp/build-meta.json
+    - DIGEST="$(python3 -c 'import json;print(json.load(open("/tmp/build-meta.json"))["containerimage.digest"])')"
+    - echo "DIGEST=${DIGEST}" > build.env
+    # firmar imagen (keyless, identidad OIDC del pipeline)
+    - !reference [.install-cosign, script]
+    - cosign sign --yes "${IMAGE}@${DIGEST}"
+  artifacts:
+    reports:
+      dotenv: build.env
+
+# ── deploy staging ───────────────────────────────────────────────
+deploy-staging:
+  stage: deploy-staging
+  <<: *on-push
+  needs: [build]
+  image: $GCLOUD_IMAGE
+  environment:
+    name: staging
+  resource_group: staging # nunca dos deploys a la vez ni cortar uno a medias
+  variables:
+    WIF_PROVIDER: $WIF_PROVIDER_STAGING
+    CICD_SA: $CICD_SA_STAGING
+  id_tokens:
+    GCP_ID_TOKEN:
+      aud: https://iam.googleapis.com/${WIF_PROVIDER_STAGING}
+  script:
+    - !reference [.gcp-auth, script]
+    # verificar firma antes de desplegar
+    - !reference [.install-cosign, script]
+    - >
+      cosign verify "${IMAGE}@${DIGEST}"
+      --certificate-oidc-issuer="${CI_SERVER_URL}"
+      --certificate-identity-regexp="^${CI_SERVER_URL}/${CI_PROJECT_PATH}//\.gitlab-ci\.yml@"
+      >/dev/null
+    - !reference [.install-ansible, script]
+    - ansible-playbook playbooks/deploy.yml -e env=staging -e image_sha="${DIGEST}"
+    # idempotencia (segunda ejecución = changed=0)
+    - ansible-playbook playbooks/deploy.yml -e env=staging -e image_sha="${DIGEST}" | tee run2.log
+    - "grep -Eq 'localhost +: .*changed=0 ' run2.log"
+
+# ── deploy production ────────────────────────────────────────────
+deploy-production:
+  stage: deploy-production
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+      when: manual
+  allow_failure: false # el pipeline queda "bloqueado" hasta aprobar
+  needs: [build, deploy-staging]
+  image: $GCLOUD_IMAGE
+  environment:
+    name: production
+  resource_group: production
+  variables:
+    WIF_PROVIDER: $WIF_PROVIDER_PRODUCTION
+    CICD_SA: $CICD_SA_PRODUCTION
+  id_tokens:
+    GCP_ID_TOKEN:
+      aud: https://iam.googleapis.com/${WIF_PROVIDER_PRODUCTION}
+  script:
+    - !reference [.gcp-auth, script]
+    - !reference [.install-ansible, script]
+    # promover el MISMO digest a producción
+    - ansible-playbook playbooks/deploy.yml -e env=production -e image_sha="${DIGEST}"

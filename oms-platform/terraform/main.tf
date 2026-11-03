@@ -91,10 +91,10 @@ module "iam" {
   github_repository            = var.github_repository
   allowed_refs                 = var.github_allowed_refs
   artifact_registry_project_id = var.artifact_registry_project_id
-  secret_names = [
-    module.database.db_password_secret_name,
-    module.database.redis_auth_secret_name,
-  ]
+  secret_names = {
+    db_password = module.database.db_password_secret_name
+    redis_auth  = module.database.redis_auth_secret_name
+  }
 
   depends_on = [google_project_service.enabled]
 }

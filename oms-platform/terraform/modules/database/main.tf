@@ -100,7 +100,7 @@ resource "google_sql_database_instance" "main" {
       start_time                     = "03:00"
       location                       = var.region # backups dentro de la UE
       backup_retention_settings {
-        retained_backups = 14
+        retained_backups = 15 # debe ser > transaction_log_retention_days (regla de Cloud SQL)
         retention_unit   = "COUNT"
       }
     }
