@@ -31,8 +31,8 @@ variable "allowed_refs" {
 }
 
 variable "secret_names" {
-  type        = list(string)
-  description = "Nombres completos de los secretos que el runtime puede leer."
+  type        = map(string)
+  description = "Secretos que el runtime puede leer: clave estática => nombre completo del secreto (las claves deben conocerse en plan)."
 }
 
 variable "artifact_registry_project_id" {
@@ -57,7 +57,7 @@ resource "google_project_iam_member" "runtime_sql_client" {
 # Binding a nivel de SECRETO, no de proyecto: el runtime no puede leer
 # ningún otro secreto que se cree en el proyecto en el futuro.
 resource "google_secret_manager_secret_iam_member" "runtime_accessor" {
-  for_each  = toset(var.secret_names)
+  for_each  = var.secret_names
   secret_id = each.value
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.runtime.email}"
