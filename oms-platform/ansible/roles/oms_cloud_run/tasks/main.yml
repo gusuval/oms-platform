@@ -12,8 +12,9 @@
 # google.cloud (1.x) no trae módulos de Cloud Run. Usamos `gcloud` con
 # salida JSON + changed_when explícitos; nunca shell, siempre command.
 #
-# Terraform crea el servicio (config, secretos, VPC, probes). Ansible solo
-# cambia imagen, capacidad y tráfico — Terraform ignora esos campos.
+# Terraform crea el servicio (config, secretos, VPC, probes) e ignora imagen y
+# tráfico, que gestiona Ansible. La capacidad la declaran ambos: tfvars y
+# group_vars deben coincidir, y Ansible solo la aplica al desplegar otra imagen.
 
 - name: "Comprobar que gcloud tiene una cuenta activa"
   ansible.builtin.command:

@@ -8,7 +8,7 @@ env:         "production"                 # identidad del entorno
 gcp_project: "gusuval-acme-oms-prod"      # proyecto GCP distinto por entorno
 
 # Capacidad — tráfico real con headroom (mismos valores que production.tfvars)
-cloud_run_min_instances: 2                # nunca a cero: evita cold starts
+cloud_run_min_instances: 5                # nunca a cero: evita cold starts
 cloud_run_max_instances: 25               # NFR-SCAL-001: pico 5×
 cloud_run_cpu:    "2000m"                 # latencia p95 con carga real
 cloud_run_memory: "2Gi"
