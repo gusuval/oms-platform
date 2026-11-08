@@ -4,7 +4,7 @@
 # del canary. Todo lo demás (comportamiento) vive en all.yml.
 
 env:         "staging"                    # identidad del entorno
-gcp_project: "gusuval-acme-oms-staging"   # proyecto GCP distinto por entorno
+gcp_project: "gusuval-acme-oms-stg2"   # proyecto GCP distinto por entorno
 
 # Capacidad — ajustada a tráfico de QA (mismos valores que staging.tfvars)
 cloud_run_min_instances: 0                # escala a cero: sin tráfico, sin coste

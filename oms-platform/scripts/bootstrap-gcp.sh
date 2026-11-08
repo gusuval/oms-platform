@@ -18,7 +18,7 @@ set -euo pipefail
 
 REGION="europe-west3"
 declare -A PROJECTS=(
-  [staging]="gusuval-acme-oms-staging"
+  [staging]="gusuval-acme-oms-stg2"
   [production]="gusuval-acme-oms-prod"
 )
 

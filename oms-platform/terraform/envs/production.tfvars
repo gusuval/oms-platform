@@ -23,8 +23,8 @@ cloud_run_max_instances = 25 # NFR-SCAL-001: pico 5× del normal
 cloud_run_cpu           = "2000m"
 cloud_run_memory        = "2Gi"
 
-artifact_registry_project_id = "gusuval-acme-oms-staging"
-image_repo                   = "europe-west3-docker.pkg.dev/gusuval-acme-oms-staging/oms/oms"
+artifact_registry_project_id = "gusuval-acme-oms-stg2"
+image_repo                   = "europe-west3-docker.pkg.dev/gusuval-acme-oms-stg2/oms/oms"
 image_sha                    = ""
 
 domain = ""

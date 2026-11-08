@@ -51,21 +51,21 @@ oms-platform/
 
 ## Cómo arrancar
 
-> Proyectos usados: `gusuval-acme-oms-staging` y `gusuval-acme-oms-prod`
+> Proyectos usados: `gusuval-acme-oms-stg2` y `gusuval-acme-oms-prod`
 > (los IDs de proyecto de GCP admiten como máximo 30 caracteres). Si los tuyos
 > son otros, cámbialos en `terraform/envs/*`, `ansible/group_vars/*` y en
 > `IMAGE` de `.github/workflows/ci-cd.yml`.
 
 1. **Proyectos y APIs mínimas** (el resto las habilita Terraform con `google_project_service`):
    ```bash
-   for P in gusuval-acme-oms-staging gusuval-acme-oms-prod; do
+   for P in gusuval-acme-oms-stg2 gusuval-acme-oms-prod; do
      gcloud services enable serviceusage.googleapis.com cloudresourcemanager.googleapis.com --project=$P
    done
    ```
 
 2. **Bucket de estado por entorno** (versionado):
    ```bash
-   for P in gusuval-acme-oms-staging gusuval-acme-oms-prod; do
+   for P in gusuval-acme-oms-stg2 gusuval-acme-oms-prod; do
      gcloud storage buckets create gs://$P-tfstate --project=$P \
        --location=europe-west3 --uniform-bucket-level-access
      gcloud storage buckets update gs://$P-tfstate --versioning
@@ -151,15 +151,15 @@ restringe el ref: staging acepta `main` y tags `v*`; producción **solo** tags `
 ```bash
 # Restaurar PITR a una instancia NUEVA (nunca sobre la original)
 gcloud sql instances clone oms-staging-postgres oms-staging-restore-$(date +%Y%m) \
-  --project=gusuval-acme-oms-staging \
+  --project=gusuval-acme-oms-stg2 \
   --point-in-time="$(date -u -d '-2 hours' +%Y-%m-%dT%H:%M:%SZ)"
 
 # Verificar datos y medir el tiempo (objetivo RTO ≤ 4 h, RPO ≤ 1 h)
 gcloud sql connect oms-staging-restore-$(date +%Y%m) --user=oms_app --database=oms \
-  --project=gusuval-acme-oms-staging
+  --project=gusuval-acme-oms-stg2
 
 # Limpiar
-gcloud sql instances delete oms-staging-restore-$(date +%Y%m) --project=gusuval-acme-oms-staging
+gcloud sql instances delete oms-staging-restore-$(date +%Y%m) --project=gusuval-acme-oms-stg2
 ```
 
 ## Decisiones

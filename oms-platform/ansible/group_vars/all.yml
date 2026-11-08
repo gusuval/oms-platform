@@ -8,7 +8,7 @@ region:         "europe-west3"
 
 # Registry ÚNICO para todos los entornos: la imagen se construye una vez
 # (en staging) y producción despliega exactamente el mismo digest.
-artifact_registry_project: "gusuval-acme-oms-staging"
+artifact_registry_project: "gusuval-acme-oms-stg2"
 image_repo: "europe-west3-docker.pkg.dev/{{ artifact_registry_project }}/oms/oms"
 
 # El SHA de la imagen se pasa por -e en el comando, NO se hardcodea.

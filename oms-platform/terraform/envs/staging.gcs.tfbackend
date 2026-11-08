@@ -1,2 +1,2 @@
-bucket = "gusuval-acme-oms-staging-tfstate"
+bucket = "gusuval-acme-oms-stg2-tfstate"
 prefix = "oms-platform/staging"
