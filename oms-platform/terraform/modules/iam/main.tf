@@ -166,6 +166,16 @@ resource "google_project_iam_member" "cicd_ar_writer" {
   member  = "serviceAccount:${google_service_account.cicd.email}"
 }
 
+# En los entornos que tiran del registry de otro proyecto, el CI/CD también
+# necesita LEER: `gcloud run deploy` comprueba que quien despliega puede
+# acceder a la imagen, no solo el service agent de Cloud Run.
+resource "google_project_iam_member" "cicd_ar_reader" {
+  count   = var.artifact_registry_project_id == var.project_id ? 0 : 1
+  project = var.artifact_registry_project_id
+  role    = "roles/artifactregistry.reader"
+  member  = "serviceAccount:${google_service_account.cicd.email}"
+}
+
 # ─── Outputs ──────────────────────────────────────────────────────
 output "runtime_service_account_email" {
   description = "Email del SA del runtime. Espera a sus bindings: Cloud Run no arranca sin acceso a los secretos."
