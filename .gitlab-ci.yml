@@ -161,34 +161,46 @@ build:
       aud: https://iam.googleapis.com/${WIF_PROVIDER_STAGING}
     SIGSTORE_ID_TOKEN: # firma keyless con cosign
       aud: sigstore
+  # Un único build por commit: el pipeline de main y el del tag v* del mismo
+  # commit se serializan y el segundo reutiliza la imagen del primero (el
+  # registry tiene immutable_tags y rechazaría un segundo push de :<sha>).
+  resource_group: build-$CI_COMMIT_SHA
   script:
     - !reference [.gcp-auth, script]
-    - docker buildx create --use --name oms-builder
-    # metadatos
-    - BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    - |
-      if [[ -n "$CI_COMMIT_TAG" ]]; then
-        VERSION="${CI_COMMIT_TAG#v}"
-        TAGS="-t ${IMAGE}:${CI_COMMIT_SHA} -t ${IMAGE}:${CI_COMMIT_TAG}"
-      else
-        VERSION="0.0.0-${CI_COMMIT_SHA:0:12}"
-        TAGS="-t ${IMAGE}:${CI_COMMIT_SHA}"
-      fi
-    # build & push
+    # Promoción, no rebuild: si este commit ya se construyó, se reutiliza su
+    # digest (el ya probado en staging), que además ya está firmado.
     - >
-      docker buildx build oms-platform/app
-      -f oms-platform/docker/Dockerfile
-      --push --provenance=true --sbom=true
-      $TAGS
-      --build-arg GIT_SHA="$CI_COMMIT_SHA"
-      --build-arg BUILD_DATE="$BUILD_DATE"
-      --build-arg VERSION="$VERSION"
-      --metadata-file /tmp/build-meta.json
-    - DIGEST="$(python3 -c 'import json;print(json.load(open("/tmp/build-meta.json"))["containerimage.digest"])')"
+      DIGEST="$(gcloud artifacts docker images describe "${IMAGE}:${CI_COMMIT_SHA}"
+      --format='value(image_summary.digest)' 2>/dev/null || true)"
+    - |
+      if [[ -n "$DIGEST" ]]; then
+        echo "Reutilizando ${IMAGE}@${DIGEST} (no se reconstruye)"
+      else
+        docker buildx create --use --name oms-builder
+        BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        if [[ -n "$CI_COMMIT_TAG" ]]; then
+          VERSION="${CI_COMMIT_TAG#v}"
+        else
+          VERSION="0.0.0-${CI_COMMIT_SHA:0:12}"
+        fi
+        # build & push (solo :<sha>; el tag de versión se añade sobre el digest)
+        docker buildx build oms-platform/app \
+          -f oms-platform/docker/Dockerfile \
+          --push --provenance=true --sbom=true \
+          -t "${IMAGE}:${CI_COMMIT_SHA}" \
+          --build-arg GIT_SHA="$CI_COMMIT_SHA" \
+          --build-arg BUILD_DATE="$BUILD_DATE" \
+          --build-arg VERSION="$VERSION" \
+          --metadata-file /tmp/build-meta.json
+        DIGEST="$(python3 -c 'import json;print(json.load(open("/tmp/build-meta.json"))["containerimage.digest"])')"
+        NEEDS_SIGN=1
+      fi
     - echo "DIGEST=${DIGEST}" > build.env
-    # firmar imagen (keyless, identidad OIDC del pipeline)
+    # firmar imagen (keyless, identidad OIDC del pipeline) solo si es nueva
     - !reference [.install-cosign, script]
-    - cosign sign --yes "${IMAGE}@${DIGEST}"
+    - '[[ -z "${NEEDS_SIGN:-}" ]] || cosign sign --yes "${IMAGE}@${DIGEST}"'
+    # tag de versión sobre el digest
+    - '[[ -z "$CI_COMMIT_TAG" ]] || gcloud artifacts docker tags add "${IMAGE}@${DIGEST}" "${IMAGE}:${CI_COMMIT_TAG}"'
   artifacts:
     reports:
       dotenv: build.env
