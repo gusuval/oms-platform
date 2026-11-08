@@ -23,7 +23,10 @@ WORKDIR /app
 
 # Aprovechar cache: solo se reinstala si cambian package*.json
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+# mkdir -p: sin dependencias de producción npm ci no crea node_modules y el
+# COPY --from=deps de la etapa runtime fallaría.
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force && \
+    mkdir -p node_modules
 
 # ─── Etapa 2: runtime ─────────────────────────────────────────────
 FROM node:${NODE_VERSION}-alpine

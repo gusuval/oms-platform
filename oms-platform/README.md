@@ -51,21 +51,21 @@ oms-platform/
 
 ## Cómo arrancar
 
-> Proyectos usados: `gusuval-acme-oms-staging` y `gusuval-acme-oms-prod`
+> Proyectos usados: `gusuval-acme-oms-stg2` y `gusuval-acme-oms-prod`
 > (los IDs de proyecto de GCP admiten como máximo 30 caracteres). Si los tuyos
 > son otros, cámbialos en `terraform/envs/*`, `ansible/group_vars/*` y en
 > `IMAGE` de `.github/workflows/ci-cd.yml`.
 
 1. **Proyectos y APIs mínimas** (el resto las habilita Terraform con `google_project_service`):
    ```bash
-   for P in gusuval-acme-oms-staging gusuval-acme-oms-prod; do
+   for P in gusuval-acme-oms-stg2 gusuval-acme-oms-prod; do
      gcloud services enable serviceusage.googleapis.com cloudresourcemanager.googleapis.com --project=$P
    done
    ```
 
 2. **Bucket de estado por entorno** (versionado):
    ```bash
-   for P in gusuval-acme-oms-staging gusuval-acme-oms-prod; do
+   for P in gusuval-acme-oms-stg2 gusuval-acme-oms-prod; do
      gcloud storage buckets create gs://$P-tfstate --project=$P \
        --location=europe-west3 --uniform-bucket-level-access
      gcloud storage buckets update gs://$P-tfstate --versioning
@@ -137,7 +137,7 @@ restringe el ref: staging acepta `main` y tags `v*`; producción **solo** tags `
 | NFR-AVAIL-001 | Cloud SQL `REGIONAL`, Redis `STANDARD_HA`, Cloud Run regional |
 | NFR-SEC-001 | AES-256 en reposo (clave gestionada por Google); Cloud SQL `ENCRYPTED_ONLY`, Redis con TLS |
 | NFR-SEC-002 | `ssl_policy` `RESTRICTED`: TLS 1.2 como mínimo aceptable, TLS 1.3 negociado por los clientes modernos; HTTP→HTTPS 301 |
-| NFR-SCAL-001 | `max_instance_count` 25 en prod (5× el pico) |
+| NFR-SCAL-001 | `max_instance_count` 20 en prod con 1 vCPU / 2 GiB (4× el mínimo). Limitado por la cuota de Cloud Run del proyecto (20 vCPU / 40 GiB en europe-west3; aumento denegado). Objetivo: 25 × 2 vCPU cuando se apruebe la cuota |
 | NFR-PERF-001 | Memorystore delante del catálogo (`REDIS_HOST/PORT/AUTH` inyectados) |
 | OPS-005 | PITR 14 días + 14 backups (runbook abajo) |
 | OPS-007 | `CACHE_FAIL_OPEN=true`: la app debe tratar Redis como opcional y leer de la BD si falla |
@@ -151,15 +151,15 @@ restringe el ref: staging acepta `main` y tags `v*`; producción **solo** tags `
 ```bash
 # Restaurar PITR a una instancia NUEVA (nunca sobre la original)
 gcloud sql instances clone oms-staging-postgres oms-staging-restore-$(date +%Y%m) \
-  --project=gusuval-acme-oms-staging \
+  --project=gusuval-acme-oms-stg2 \
   --point-in-time="$(date -u -d '-2 hours' +%Y-%m-%dT%H:%M:%SZ)"
 
 # Verificar datos y medir el tiempo (objetivo RTO ≤ 4 h, RPO ≤ 1 h)
 gcloud sql connect oms-staging-restore-$(date +%Y%m) --user=oms_app --database=oms \
-  --project=gusuval-acme-oms-staging
+  --project=gusuval-acme-oms-stg2
 
 # Limpiar
-gcloud sql instances delete oms-staging-restore-$(date +%Y%m) --project=gusuval-acme-oms-staging
+gcloud sql instances delete oms-staging-restore-$(date +%Y%m) --project=gusuval-acme-oms-stg2
 ```
 
 ## Decisiones

@@ -5,7 +5,7 @@
 # Diferencias con production.tfvars (todas de capacidad/identidad):
 #   project_id, db_tier, redis_memory_size_gb, cloud_run_*, github_allowed_refs
 
-project_id = "gusuval-acme-oms-staging"
+project_id = "gusuval-acme-oms-stg2"
 region     = "europe-west3" # REG-GDPR-001
 env        = "staging"
 
@@ -20,8 +20,8 @@ cloud_run_cpu           = "1000m"
 cloud_run_memory        = "1Gi"
 
 # Registry compartido: vive en staging; producción tira del MISMO digest.
-artifact_registry_project_id = "gusuval-acme-oms-staging"
-image_repo                   = "europe-west3-docker.pkg.dev/gusuval-acme-oms-staging/oms/oms"
+artifact_registry_project_id = "gusuval-acme-oms-stg2"
+image_repo                   = "europe-west3-docker.pkg.dev/gusuval-acme-oms-stg2/oms/oms"
 image_sha                    = "" # bootstrap; a partir de ahí despliega Ansible
 
 domain = "" # vacío → <IP-LB>.nip.io

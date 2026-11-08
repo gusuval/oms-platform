@@ -34,7 +34,7 @@ stages: [validate, test, build, deploy-staging, deploy-production]
 
 variables:
   REGION: europe-west3
-  IMAGE: europe-west3-docker.pkg.dev/gusuval-acme-oms-staging/oms/oms
+  IMAGE: europe-west3-docker.pkg.dev/gusuval-acme-oms-stg2/oms/oms
   TERRAFORM_VERSION: "1.9.8"
   ANSIBLE_CORE: "ansible-core>=2.16,<2.22"
   COSIGN_VERSION: "v2.4.1"

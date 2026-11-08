@@ -7,11 +7,11 @@
 # el grupo role_bastion.
 #
 # Uso:
-#   GCP_PROJECT=gusuval-acme-oms-staging ansible-inventory -i inventory/gcp.yml --graph
+#   GCP_PROJECT=gusuval-acme-oms-stg2 ansible-inventory -i inventory/gcp.yml --graph
 
 plugin: google.cloud.gcp_compute
 projects:
-  - "{{ lookup('env', 'GCP_PROJECT') | default('gusuval-acme-oms-staging', true) }}"
+  - "{{ lookup('env', 'GCP_PROJECT') | default('gusuval-acme-oms-stg2', true) }}"
 zones:
   - europe-west3-a
   - europe-west3-b
