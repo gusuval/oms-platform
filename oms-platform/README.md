@@ -137,7 +137,7 @@ restringe el ref: staging acepta `main` y tags `v*`; producción **solo** tags `
 | NFR-AVAIL-001 | Cloud SQL `REGIONAL`, Redis `STANDARD_HA`, Cloud Run regional |
 | NFR-SEC-001 | AES-256 en reposo (clave gestionada por Google); Cloud SQL `ENCRYPTED_ONLY`, Redis con TLS |
 | NFR-SEC-002 | `ssl_policy` `RESTRICTED`: TLS 1.2 como mínimo aceptable, TLS 1.3 negociado por los clientes modernos; HTTP→HTTPS 301 |
-| NFR-SCAL-001 | `max_instance_count` 25 en prod (5× el pico) |
+| NFR-SCAL-001 | `max_instance_count` 20 en prod con 1 vCPU / 2 GiB (4× el mínimo). Limitado por la cuota de Cloud Run del proyecto (20 vCPU / 40 GiB en europe-west3; aumento denegado). Objetivo: 25 × 2 vCPU cuando se apruebe la cuota |
 | NFR-PERF-001 | Memorystore delante del catálogo (`REDIS_HOST/PORT/AUTH` inyectados) |
 | OPS-005 | PITR 14 días + 14 backups (runbook abajo) |
 | OPS-007 | `CACHE_FAIL_OPEN=true`: la app debe tratar Redis como opcional y leer de la BD si falla |

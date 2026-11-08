@@ -19,8 +19,8 @@ db_tier              = "db-perf-optimized-N-4" # 4 vCPU (Enterprise Plus, PITR 1
 redis_memory_size_gb = 5
 
 cloud_run_min_instances = 5  # nunca a cero: latencia consistente
-cloud_run_max_instances = 25 # NFR-SCAL-001: pico 5× del normal
-cloud_run_cpu           = "2000m"
+cloud_run_max_instances = 20 # NFR-SCAL-001: pico 4× (cuota Cloud Run 20 vCPU/40 GiB; objetivo 25)
+cloud_run_cpu           = "1000m"
 cloud_run_memory        = "2Gi"
 
 artifact_registry_project_id = "gusuval-acme-oms-stg2"
