@@ -120,8 +120,14 @@ jobs:
     permissions:
       contents: read
       id-token: write # OIDC → WIF (y firma keyless con cosign)
+    # Un único build por commit: si main y el tag v* del mismo commit corren a
+    # la vez, el segundo espera y reutiliza la imagen del primero (el registry
+    # tiene immutable_tags y rechazaría un segundo push de :<sha>).
+    concurrency:
+      group: build-${{ github.sha }}
+      cancel-in-progress: false
     outputs:
-      digest: ${{ steps.build.outputs.digest }}
+      digest: ${{ steps.existing.outputs.digest || steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -136,22 +142,36 @@ jobs:
       - name: login en Artifact Registry
         run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
+      # Promoción, no rebuild: si este commit ya se construyó (normalmente en el
+      # push a main), se reutiliza su digest, que es el ya probado en staging.
+      - name: ¿imagen ya construida para este commit?
+        id: existing
+        run: |
+          DIGEST="$(gcloud artifacts docker images describe "${IMAGE}:${GITHUB_SHA}" \
+            --format='value(image_summary.digest)' 2>/dev/null || true)"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          if [[ -n "$DIGEST" ]]; then
+            echo "Reutilizando ${IMAGE}@${DIGEST} (no se reconstruye)"
+          fi
+
       - uses: docker/setup-buildx-action@v3
+        if: steps.existing.outputs.digest == ''
 
       - name: metadatos
         id: meta
+        if: steps.existing.outputs.digest == ''
         run: |
           echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-            echo "tags=${IMAGE}:${GITHUB_SHA},${IMAGE}:${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           else
             echo "version=0.0.0-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
-            echo "tags=${IMAGE}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
           fi
 
+      # Solo :<sha>; el tag de versión se añade después sobre el digest.
       - name: build & push
         id: build
+        if: steps.existing.outputs.digest == ''
         uses: docker/build-push-action@v6
         with:
           context: oms-platform/app
@@ -159,16 +179,25 @@ jobs:
           push: true
           provenance: true
           sbom: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
           build-args: |
             GIT_SHA=${{ github.sha }}
             BUILD_DATE=${{ steps.meta.outputs.date }}
             VERSION=${{ steps.meta.outputs.version }}
 
       - uses: sigstore/cosign-installer@v3
+        if: steps.existing.outputs.digest == ''
 
+      # Una imagen reutilizada ya se firmó en el run que la construyó.
       - name: firmar imagen (keyless, identidad OIDC del workflow)
+        if: steps.existing.outputs.digest == ''
         run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
+
+      - name: añadir tag de versión al digest
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          DIGEST: ${{ steps.existing.outputs.digest || steps.build.outputs.digest }}
+        run: gcloud artifacts docker tags add "${IMAGE}@${DIGEST}" "${IMAGE}:${GITHUB_REF_NAME}"
 
   deploy-staging:
     needs: build
